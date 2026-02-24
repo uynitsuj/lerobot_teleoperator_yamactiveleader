@@ -1,3 +1,17 @@
+Metadata-Version: 2.4
+Name: lerobot_teleoperator_yamactiveleader
+Version: 0.1.0
+Summary: LeRobot teleop device
+Author-email: Justin Yu <yujustin@berkeley.edu>
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: numpy
+Requires-Dist: transforms3d
+Requires-Dist: lerobot
+
 # lerobot_teleoperator_yamactiveleader
 Active YAM teleop leader device integration for LeRobot
 
