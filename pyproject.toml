@@ -21,7 +21,7 @@ classifiers = [
 dependencies = [
   "numpy",
   "transforms3d",
-  "lerobot",
+  "lerobot[feetech]",
 ]
 
 [tool.setuptools.packages.find]
