@@ -10,10 +10,9 @@ uv pip install -e .
 
 lerobot-find-port # find out which port the WaveShare Bus Servo Adapter is on, set as arg for setup_motors.py
 
-uv run setup_motors.py tty.usbmodem5AE60805531
+uv run setup_motors.py /dev/tty.usbmodem5AE60805531
 
-lerobot-calibrate --teleop.type=yam_active_leader \
-    --teleop.port=/dev/tty.usbmodem5AE60805531
+lerobot-calibrate --teleop.type=yam_active_leader --teleop.port=/dev/tty.usbmodem5AE60805531
     
 ```
 
