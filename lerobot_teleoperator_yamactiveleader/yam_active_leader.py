@@ -275,7 +275,7 @@ class YamActiveLeaderTeleoperator(Teleoperator):
 
         displacement = abs(gripper_pos - cfg["open_pos"])
         # raw_current = self.bus.read("Present_Current", "gripper", normalize=False)
-        raw_current = self.bus.sync_read("Present_Current", "gripper", normalize=False)["gripper"]
+        raw_current = self.bus.sync_read("Present_Current", "gripper", normalize=False, num_retry=3)["gripper"]
 
         # Low-pass filter (EMA) to smooth noisy current spikes that cause
         # bang-bang oscillation between squeeze and release states.
@@ -300,7 +300,7 @@ class YamActiveLeaderTeleoperator(Teleoperator):
         # print(f"raw: {raw_current}  filtered: {current:.1f}  disp: {displacement:.1f}  "
         #       f"delta: {disp_delta:.2f}  {'closing' if closing else 'opening'}  torque: {torque}")
 
-        self.bus.sync_write("Torque_Limit", {"gripper": torque})
+        self.bus.sync_write("Torque_Limit", {"gripper": torque}, num_retry=3)
         logger.debug(
             "Gripper spring: pos=%.1f  disp=%.1f  disp_delta=%.2f  raw=%d  filtered=%.1f  torque=%d",
             gripper_pos, displacement, disp_delta, raw_current, current, torque,
@@ -319,7 +319,14 @@ class YamActiveLeaderTeleoperator(Teleoperator):
     @check_if_not_connected
     def get_action(self) -> dict[str, float]:
         start = time.perf_counter()
-        action = self.bus.sync_read("Present_Position")
+        # instead of retrying sync read, just repeat last if failed
+        try:
+            action = self.bus.sync_read("Present_Position")
+        except Exception as e:
+            logger.error(f"Error reading action: {e}")
+            action = {f"{motor}.pos": val for motor, val in self._last_action.items()}
+            return action
+        self._last_action = action
         action = {f"{motor}.pos": val for motor, val in action.items()}
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read action: {dt_ms:.1f}ms")
