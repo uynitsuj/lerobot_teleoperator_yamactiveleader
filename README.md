@@ -1,6 +1,10 @@
 # lerobot_teleoperator_yamactiveleader
 Active YAM teleop leader device integration for LeRobot
 
+<img src="media/yam_active_leader.gif" width="500">
+
+[Bill of Materials](BOM.md)
+
 ## Getting Started
 
 ```bash
