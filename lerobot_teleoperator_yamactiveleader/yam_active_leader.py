@@ -131,7 +131,93 @@ class YamActiveLeaderTeleoperator(Teleoperator):
 
     HALF_TURN_RAW = 0  # raw value that always equals zero cfg after homing
 
-    def drive_to_zero(self, settle_time: float = 2.0) -> None:
+    # --- drive_to_zero ---
+
+    # Seconds to wait after commanding all motors to zero before releasing arm torque.
+    ZERO_SETTLE_TIME: float = 2.0
+
+    # --- drive_to_config (DAgger hold approach) ---
+
+    # Seconds to wait after commanding the arm to the target config before
+    # sampling baseline currents.  Must be long enough for the arm to fully
+    # reach and settle at the target; increase for slow or loaded moves.
+    DRIVE_SETTLE_TIME: float = 3.0
+
+    # Torque limit (0–1000) applied to all arm motors during the approach
+    # move.  Lower values produce a slower, gentler motion; higher values
+    # snap to the target faster.  The limit persists during the subsequent
+    # hold phase, so it also governs how hard the arm resists disturbances
+    # while waiting for human intervention.
+    DRIVE_TORQUE_LIMIT: int = 700
+
+    # --- start_arm_hold (intervention detection) ---
+
+    # Number of Present_Current readings averaged to establish the per-joint
+    # baseline after the arm has settled.  More samples give a more stable
+    # baseline at the cost of a longer setup pause (~HOLD_BASELINE_SAMPLES ×
+    # HOLD_BASELINE_INTERVAL seconds).
+    HOLD_BASELINE_SAMPLES: int = 30
+
+    # Sleep time (seconds) between baseline current samples.  Together with
+    # HOLD_BASELINE_SAMPLES this controls the total baseline collection time.
+    HOLD_BASELINE_INTERVAL: float = 0.02
+
+    # Raw current delta (above per-joint baseline) on any single joint that
+    # is considered evidence of active human input.  Too low → false triggers
+    # from noise; too high → sluggish detection.  Tune empirically by
+    # watching the `max_delta` debug log while the arm is held still vs.
+    # while you push against it.
+    HOLD_DELTA_THRESHOLD: float = 15.0
+
+    # EMA smoothing factor for live current readings during hold monitoring
+    # (0–1).  Lower values apply heavier smoothing, reducing noise at the
+    # cost of added detection lag.
+    HOLD_FILTER_ALPHA: float = 0.1
+
+    # Number of consecutive control-loop frames that must exceed
+    # HOLD_DELTA_THRESHOLD before intervention is confirmed.  Acts as a
+    # debounce: prevents transient current spikes from triggering a false
+    # intervention.
+    HOLD_SUSTAINED_FRAMES: int = 5
+
+    # --- start_gripper_spring ---
+
+    # Normalized target position the gripper motor drives toward when the
+    # user is not squeezing (-100 … 100 in RANGE_M100_100 mode, 0 = midpoint
+    # / open position after homing).
+    GRIPPER_OPEN_POS: float = 0.0
+
+    # Torque limit (0–1000) applied while the motor is driving the trigger
+    # back toward the open position.  Higher values make the return snap feel
+    # stronger.
+    GRIPPER_RETURN_TORQUE: int = 400
+
+    # Torque limit (0–1000) applied while the user is actively squeezing the
+    # trigger.  Keep very low so the trigger is easy to hold against the
+    # motor's return force.
+    GRIPPER_SQUEEZE_TORQUE: int = 1
+
+    # Displacement from GRIPPER_OPEN_POS (in normalized units) below which
+    # the motor is always in return mode regardless of current.  Prevents the
+    # spring logic from activating when the trigger is nearly at rest.
+    GRIPPER_PRESS_THRESHOLD: float = 50.0
+
+    # Present_Current reading (raw) above which the motor is considered to be
+    # fighting the user's grip (squeeze state).  Tune with live readings from
+    # read_gripper_spring_state().  Must be > GRIPPER_RELEASE_CURRENT.
+    GRIPPER_SQUEEZE_CURRENT: int = 10
+
+    # Present_Current reading (raw) below which the motor considers the user
+    # to have released the trigger (release state).  Hysteresis gap between
+    # this and GRIPPER_SQUEEZE_CURRENT prevents chatter at the boundary.
+    GRIPPER_RELEASE_CURRENT: float = 5.0
+
+    # EMA smoothing factor for gripper current readings (0–1).  Lower values
+    # apply heavier smoothing to damp the rapid spikes that cause bang-bang
+    # oscillation between squeeze and release states.
+    GRIPPER_FILTER_ALPHA: float = 0.05
+
+    def drive_to_zero(self, settle_time: float | None = None) -> None:
         """Enable torque and command every motor to the physical zero config.
 
         Uses raw 2048 (the encoder value that ``set_half_turn_homings``
@@ -143,6 +229,7 @@ class YamActiveLeaderTeleoperator(Teleoperator):
         **not** released — call :pymeth:`release_gripper` explicitly if
         needed.
         """
+        settle_time = settle_time if settle_time is not None else self.ZERO_SETTLE_TIME
         logger.info("Driving all motors to zero config (raw 2048)...")
         # --- Debug: BEFORE ---
         raw_before = self.bus.sync_read("Present_Position", normalize=False)
@@ -186,14 +273,14 @@ class YamActiveLeaderTeleoperator(Teleoperator):
 
     def start_gripper_spring(
         self,
-        open_pos: float = 0,
-        return_torque: int = 400,
-        min_return_torque: int = 1,
-        press_threshold: float = 50,
+        open_pos: float | None = None,
+        return_torque: int | None = None,
+        min_return_torque: int | None = None,
+        press_threshold: float | None = None,
         p_coeff: int | None = None,
-        current_squeeze_threshold: int = 10,
-        current_release_threshold: float = 5.0,
-        current_filter_alpha: float = 0.05,
+        current_squeeze_threshold: int | None = None,
+        current_release_threshold: float | None = None,
+        current_filter_alpha: float | None = None,
     ) -> None:
         """Set up a current-sensing adaptive spring on the gripper motor.
 
@@ -233,6 +320,13 @@ class YamActiveLeaderTeleoperator(Teleoperator):
                 Default 0.15 strongly damps the rapid spikes that cause
                 bang-bang oscillation between squeeze and release states.
         """
+        open_pos = open_pos if open_pos is not None else self.GRIPPER_OPEN_POS
+        return_torque = return_torque if return_torque is not None else self.GRIPPER_RETURN_TORQUE
+        min_return_torque = min_return_torque if min_return_torque is not None else self.GRIPPER_SQUEEZE_TORQUE
+        press_threshold = press_threshold if press_threshold is not None else self.GRIPPER_PRESS_THRESHOLD
+        current_squeeze_threshold = current_squeeze_threshold if current_squeeze_threshold is not None else self.GRIPPER_SQUEEZE_CURRENT
+        current_release_threshold = current_release_threshold if current_release_threshold is not None else self.GRIPPER_RELEASE_CURRENT
+        current_filter_alpha = current_filter_alpha if current_filter_alpha is not None else self.GRIPPER_FILTER_ALPHA
         self._gripper_spring = {
             "open_pos": open_pos,
             "return_torque": return_torque,
@@ -308,6 +402,156 @@ class YamActiveLeaderTeleoperator(Teleoperator):
     def release_gripper(self) -> None:
         """Disable torque on the gripper so it can be moved freely."""
         self.bus.disable_torque("gripper")
+
+    # ------------------------------------------------------------------ #
+    # DAgger intervention support
+    # ------------------------------------------------------------------ #
+
+    def drive_to_config(
+        self,
+        joint_positions_deg: dict[str, float],
+        settle_time: float | None = None,
+        torque_limit: int | None = None,
+    ) -> None:
+        """Enable torque on arm motors and drive to the given joint positions.
+
+        Args:
+            joint_positions_deg: Dict mapping motor name → target in degrees
+                (normalized degrees matching the calibrated range).
+                Only arm motors are commanded; gripper is unaffected.
+            settle_time: Seconds to wait for the arm to reach the target.
+                Defaults to :pyattr:`DRIVE_SETTLE_TIME`.
+            torque_limit: Torque limit (0–1000) applied before moving.
+                Lower values produce a slower, gentler approach.  The limit
+                persists into the subsequent hold phase so the arm doesn't
+                snap hard against disturbances during hold either.
+                Defaults to :pyattr:`DRIVE_TORQUE_LIMIT`.
+        """
+        settle_time = settle_time if settle_time is not None else self.DRIVE_SETTLE_TIME
+        torque_limit = torque_limit if torque_limit is not None else self.DRIVE_TORQUE_LIMIT
+        logger.info("Driving arm to config: %s  torque_limit=%d", {m: f"{v:.1f}" for m, v in joint_positions_deg.items()}, torque_limit)
+        for motor in self.ARM_MOTORS:
+            self.bus.write("Torque_Limit", motor, torque_limit)
+        self.bus.enable_torque(self.ARM_MOTORS)
+        for motor in self.ARM_MOTORS:
+            if motor in joint_positions_deg:
+                self.bus.write("Goal_Position", motor, joint_positions_deg[motor])
+        time.sleep(settle_time)
+        logger.info("Arm settled at target config.")
+
+    def start_arm_hold(
+        self,
+        baseline_samples: int | None = None,
+        baseline_interval: float | None = None,
+        delta_threshold: float | None = None,
+        filter_alpha: float | None = None,
+        sustained_frames: int | None = None,
+    ) -> None:
+        """Begin monitoring for human intervention while holding current pose.
+
+        Must be called after :pymeth:`drive_to_config` has settled.  Samples
+        arm motor currents to build a per-joint baseline, then arms the
+        intervention detector.
+
+        Args:
+            baseline_samples: Number of current readings to average for the
+                per-joint baseline.  More samples → more stable baseline.
+            baseline_interval: Sleep time between baseline samples (seconds).
+            delta_threshold: Raw current delta above baseline on any joint
+                that signals active human input.  Needs empirical tuning
+                (start around 15 and adjust based on observed noise floor).
+            filter_alpha: EMA smoothing factor for live current readings
+                (0-1).  Lower = heavier smoothing / more lag.
+            sustained_frames: Consecutive frames above threshold required to
+                confirm intervention (debounces current noise spikes).
+        """
+        baseline_samples = baseline_samples if baseline_samples is not None else self.HOLD_BASELINE_SAMPLES
+        baseline_interval = baseline_interval if baseline_interval is not None else self.HOLD_BASELINE_INTERVAL
+        delta_threshold = delta_threshold if delta_threshold is not None else self.HOLD_DELTA_THRESHOLD
+        filter_alpha = filter_alpha if filter_alpha is not None else self.HOLD_FILTER_ALPHA
+        sustained_frames = sustained_frames if sustained_frames is not None else self.HOLD_SUSTAINED_FRAMES
+        logger.info("Sampling baseline arm currents (%d samples)...", baseline_samples)
+        accum: dict[str, float] = {m: 0.0 for m in self.ARM_MOTORS}
+        for _ in range(baseline_samples):
+            readings = self.bus.sync_read("Present_Current", normalize=False)
+            for m in self.ARM_MOTORS:
+                accum[m] += float(readings[m])
+            time.sleep(baseline_interval)
+        baseline = {m: accum[m] / baseline_samples for m in self.ARM_MOTORS}
+        logger.info(
+            "Arm hold baseline currents: %s",
+            {m: f"{v:.1f}" for m, v in baseline.items()},
+        )
+        self._arm_hold: dict[str, Any] = {
+            "baseline": baseline,
+            "filtered": dict(baseline),  # start filter at baseline
+            "delta_threshold": delta_threshold,
+            "filter_alpha": filter_alpha,
+            "sustained_frames": sustained_frames,
+            "sustained_count": 0,
+            "intervening": False,
+        }
+
+    @property
+    def is_arm_hold_active(self) -> bool:
+        """True while an arm hold is armed and intervention not yet detected."""
+        return hasattr(self, "_arm_hold") and self._arm_hold is not None and not self._arm_hold["intervening"]
+
+    @property
+    def is_arm_hold_intervening(self) -> bool:
+        """True once human intervention has been detected on the arm."""
+        return hasattr(self, "_arm_hold") and self._arm_hold is not None and self._arm_hold["intervening"]
+
+    def update_arm_hold(self) -> bool:
+        """Check for human intervention; call once per control loop tick.
+
+        Reads ``Present_Current`` for all arm joints, applies EMA filtering,
+        computes delta from per-joint baseline, and checks for a sustained
+        threshold crossing.  On detection, arm torque is disabled and hold
+        state is latched.
+
+        Returns:
+            True on the first frame intervention is detected; False otherwise.
+        """
+        cfg = getattr(self, "_arm_hold", None)
+        if cfg is None or cfg["intervening"]:
+            return False
+
+        try:
+            readings = self.bus.sync_read("Present_Current", normalize=False, num_retry=3)
+        except Exception as e:
+            logger.warning("update_arm_hold: current read failed: %s", e)
+            return False
+
+        alpha = cfg["filter_alpha"]
+        max_delta = 0.0
+        for m in self.ARM_MOTORS:
+            raw = float(readings[m])
+            cfg["filtered"][m] += alpha * (raw - cfg["filtered"][m])
+            delta = abs(cfg["filtered"][m] - cfg["baseline"][m])
+            max_delta = max(max_delta, delta)
+
+        if max_delta > cfg["delta_threshold"]:
+            cfg["sustained_count"] += 1
+        else:
+            cfg["sustained_count"] = 0
+
+        logger.debug(
+            "Arm hold: max_delta=%.1f  sustained=%d/%d",
+            max_delta, cfg["sustained_count"], cfg["sustained_frames"],
+        )
+
+        if cfg["sustained_count"] >= cfg["sustained_frames"]:
+            cfg["intervening"] = True
+            self.bus.disable_torque(self.ARM_MOTORS, num_retry=5)
+            logger.info("Human intervention detected — arm torque released.")
+            return True
+
+        return False
+
+    def clear_arm_hold(self) -> None:
+        """Reset hold state so a new DAgger cycle can begin."""
+        self._arm_hold = None
 
     def setup_motors(self) -> None:
         for motor in reversed(self.bus.motors):
