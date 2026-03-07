@@ -1,7 +1,9 @@
 import logging
 import time
 from typing import Any
+import copy
 
+import numpy as np
 from lerobot.motors import Motor, MotorCalibration, MotorNormMode
 from lerobot.motors.feetech import FeetechMotorsBus, OperatingMode
 from lerobot.teleoperators.teleoperator import Teleoperator
@@ -16,7 +18,7 @@ class YamActiveLeaderTeleoperator(Teleoperator):
     config_class = YamActiveLeaderTeleoperatorConfig
     name = "yam_active_leader_teleoperator"
 
-    def __init__(self, config: YamActiveLeaderTeleoperatorConfig):
+    def __init__(self, config: YamActiveLeaderTeleoperatorConfig, active_trigger: bool = True):
         super().__init__(config)
         self.config = config
         norm_mode_body = MotorNormMode.DEGREES if config.use_degrees else MotorNormMode.RANGE_M100_100
@@ -32,6 +34,9 @@ class YamActiveLeaderTeleoperator(Teleoperator):
                 "gripper": Motor(7, "sts3215", MotorNormMode.RANGE_M100_100),
             },
         )
+        self.gripper_reading_raw = None
+        self.trigger_closing = None
+        self.active_trigger = active_trigger # whether to set trigger motor as an active virtual spring
 
     @property
     def action_features(self) -> dict[str, type]:
@@ -209,14 +214,14 @@ class YamActiveLeaderTeleoperator(Teleoperator):
         the squeeze/release boundary.
 
         Args:
-            open_pos: Target in normalized units (−100 … 100).
-            return_torque: Torque limit while driving back to open (0–1000).
-            min_return_torque: Torque limit while user is squeezing (0–1000).
+            open_pos: Target in normalized units (-100 … 100).
+            return_torque: Torque limit while driving back to open (0-1000).
+            min_return_torque: Torque limit while user is squeezing (0-1000).
                 Keep low so the trigger feels easy to press.
             press_threshold: Displacement from *open_pos* below which the
                 motor is always in return mode (trigger is near home).
             p_coeff: Optional PID P-gain override written once at startup
-                (0–254).  Lower values give a softer spring feel.
+                (0-254).  Lower values give a softer spring feel.
             current_squeeze_threshold: ``Present_Current`` reading above
                 which the motor is considered to be fighting the user's grip.
                 Tune with live data from ``read_gripper_spring_state``.
@@ -224,7 +229,7 @@ class YamActiveLeaderTeleoperator(Teleoperator):
                 which the motor considers the user to have released the
                 trigger.  Must be < *current_squeeze_threshold*.
             current_filter_alpha: EMA smoothing factor for current readings
-                (0–1).  Lower values = heavier smoothing / more lag.
+                (0-1).  Lower values = heavier smoothing / more lag.
                 Default 0.15 strongly damps the rapid spikes that cause
                 bang-bang oscillation between squeeze and release states.
         """
@@ -258,7 +263,7 @@ class YamActiveLeaderTeleoperator(Teleoperator):
             current_filter_alpha,
         )
 
-    def update_gripper_spring(self, gripper_pos: float) -> None:
+    def update_gripper_spring(self) -> None:
         """Update gripper torque based on current-sensing spring logic.
 
         Call once per control loop iteration with the current (normalized)
@@ -269,12 +274,12 @@ class YamActiveLeaderTeleoperator(Teleoperator):
         ``Torque_Limit`` without ever disabling torque, so the goal position
         always pulls the trigger toward open.
         """
+        gripper_pos = self.gripper_reading_raw
         cfg = getattr(self, "_gripper_spring", None)
         if cfg is None:
             return
 
         displacement = abs(gripper_pos - cfg["open_pos"])
-        # raw_current = self.bus.read("Present_Current", "gripper", normalize=False)
         raw_current = self.bus.sync_read("Present_Current", "gripper", normalize=False, num_retry=3)["gripper"]
 
         # Low-pass filter (EMA) to smooth noisy current spikes that cause
@@ -285,20 +290,14 @@ class YamActiveLeaderTeleoperator(Teleoperator):
         # Track displacement direction: positive delta = trigger closing (squeezing)
         disp_delta = displacement - cfg["prev_displacement"]
         cfg["prev_displacement"] = displacement
-        closing = disp_delta > 0
+        self.trigger_closing = disp_delta > 0
 
-        if closing:
-            # User is actively squeezing — get out of the way
+        if self.trigger_closing:
+            # User is actively squeezing — reduce torque
             torque = cfg["squeeze_torque"]
-            # disable torque
-            # self.bus.disable_torque("gripper")
         else:
-            # Trigger is releasing or stationary — push it back open
-            # self.bus.enable_torque("gripper")
             torque = cfg["return_torque"]
 
-        # print(f"raw: {raw_current}  filtered: {current:.1f}  disp: {displacement:.1f}  "
-        #       f"delta: {disp_delta:.2f}  {'closing' if closing else 'opening'}  torque: {torque}")
 
         self.bus.sync_write("Torque_Limit", {"gripper": torque}, num_retry=3)
         logger.debug(
@@ -328,6 +327,10 @@ class YamActiveLeaderTeleoperator(Teleoperator):
             return action
         self._last_action = action
         action = {f"{motor}.pos": val for motor, val in action.items()}
+        self.gripper_reading_raw = copy.deepcopy(action["gripper.pos"])
+        if self.active_trigger:
+            self.update_gripper_spring()
+        action["gripper.pos"] = np.clip(1 - ((action["gripper.pos"] - 5) / (85 - 5)), 0, 1)  # normalize gripper position to 0-1 range, w/ some deadzone
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read action: {dt_ms:.1f}ms")
         return action
