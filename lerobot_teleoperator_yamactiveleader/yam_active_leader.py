@@ -148,7 +148,7 @@ class YamActiveLeaderTeleoperator(Teleoperator):
     # snap to the target faster.  The limit persists during the subsequent
     # hold phase, so it also governs how hard the arm resists disturbances
     # while waiting for human intervention.
-    DRIVE_TORQUE_LIMIT: int = 700
+    DRIVE_TORQUE_LIMIT: int = 800
 
     # --- start_arm_hold (intervention detection) ---
 
@@ -167,7 +167,7 @@ class YamActiveLeaderTeleoperator(Teleoperator):
     # from noise; too high → sluggish detection.  Tune empirically by
     # watching the `max_delta` debug log while the arm is held still vs.
     # while you push against it.
-    HOLD_DELTA_THRESHOLD: float = 15.0
+    HOLD_DELTA_THRESHOLD: float = 8.0
 
     # EMA smoothing factor for live current readings during hold monitoring
     # (0–1).  Lower values apply heavier smoothing, reducing noise at the
