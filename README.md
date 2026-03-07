@@ -2,6 +2,7 @@
 Active YAM teleop leader device integration for LeRobot
 
 <img src="media/yam_active_leader.gif" width="500">
+<img src="media/yam_active_leader_dagger.gif" width="500">
 
 [Bill of Materials](BOM.md)
 
