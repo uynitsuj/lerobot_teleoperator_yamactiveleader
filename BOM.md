@@ -9,4 +9,4 @@
 | 50pcs M2.3 x 8mm Stainless Steel Cross Pan Head Self Tapping Screws Bolts | 1 | $6.69 | https://www.amazon.com/dp/B01LXFTOAU?ref=ppx_yo2ov_dt_b_fed_asin_title |
 | 120pcs M3 x 6mm | 1 | $7.49 | https://www.amazon.com/dp/B0DJQH3WSX?ref=ppx_yo2ov_dt_b_fed_asin_title&th=1 |
 |---|---|---|---|
-|||$230.05||
+|||$224.65||
