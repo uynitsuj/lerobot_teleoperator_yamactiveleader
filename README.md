@@ -5,7 +5,9 @@ Active YAM teleop leader device integration for LeRobot
 <img src="media/yam_active_leader_dagger.gif" width="500">
 
 [Bill of Materials](BOM.md)
+
 [Onshape CAD](https://cad.onshape.com/documents/1bf1095238bbd48b2eeeb7b5/w/c5977f299960b20a4f0d6e0a/e/8cb256dc79a0563d72aa541c?renderMode=0&uiState=69af20032fb51000194a64a9)
+
 [Printable STL Files](stl_files)
 
 ## Getting Started
