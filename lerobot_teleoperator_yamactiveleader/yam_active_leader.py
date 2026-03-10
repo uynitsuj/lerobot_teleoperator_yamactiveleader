@@ -60,7 +60,48 @@ class YamActiveLeaderTeleoperator(Teleoperator):
             self.calibrate()
 
         self.configure()
+        self._print_motor_info()
         logger.info(f"{self} connected.")
+
+    def _print_motor_info(self) -> None:
+        """Print a diagnostic table of per-motor register values after connect."""
+        motors = list(self.bus.motors.keys())
+        registers = {
+            "TorqLim":  ("Torque_Limit",         False),
+            "MaxTorq":  ("Max_Torque_Limit",      False),
+            "MinPos":   ("Min_Position_Limit",    False),
+            "MaxPos":   ("Max_Position_Limit",    False),
+            "P":        ("P_Coefficient",         False),
+            "D":        ("D_Coefficient",         False),
+            "I":        ("I_Coefficient",         False),
+            "Mode":     ("Operating_Mode",        False),
+            "Temp°C":   ("Present_Temperature",   False),
+            "Pos(deg)": ("Present_Position",      True),
+        }
+
+        data: dict[str, dict[str, str]] = {m: {} for m in motors}
+        for label, (reg, normalized) in registers.items():
+            try:
+                vals = self.bus.sync_read(reg, normalize=normalized)
+                for m in motors:
+                    v = vals.get(m, "?")
+                    data[m][label] = f"{v:.1f}" if isinstance(v, float) else str(v)
+            except Exception as e:
+                for m in motors:
+                    data[m][label] = "err"
+
+        col_w = {label: max(len(label), max(len(data[m][label]) for m in motors)) for label in registers}
+        motor_w = max(len("Motor"), max(len(m) for m in motors))
+
+        header = f"  {'Motor':<{motor_w}}  " + "  ".join(f"{lbl:>{col_w[lbl]}}" for lbl in registers)
+        sep    = f"  {'-'*motor_w}  " + "  ".join("-" * col_w[lbl] for lbl in registers)
+        print(f"\n=== {self} motor diagnostics (port={self.config.port}) ===")
+        print(header)
+        print(sep)
+        for m in motors:
+            row = f"  {m:<{motor_w}}  " + "  ".join(f"{data[m][lbl]:>{col_w[lbl]}}" for lbl in registers)
+            print(row)
+        print()
 
     @property
     def is_calibrated(self) -> bool:
@@ -119,6 +160,8 @@ class YamActiveLeaderTeleoperator(Teleoperator):
 
     def configure(self) -> None:
         self.bus.disable_torque()
+        for motor in self.bus.motors:
+            self.bus.write("P_Coefficient", motor, 32)
         self.bus.configure_motors()
         for motor in self.bus.motors:
             self.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
@@ -566,7 +609,7 @@ class YamActiveLeaderTeleoperator(Teleoperator):
         try:
             action = self.bus.sync_read("Present_Position")
         except Exception as e:
-            logger.error(f"Error reading action: {e}")
+            logger.error(f"Error on id {self.id} reading action: {e}")
             action = {f"{motor}.pos": val for motor, val in self._last_action.items()}
             return action
         self._last_action = action
@@ -576,7 +619,7 @@ class YamActiveLeaderTeleoperator(Teleoperator):
             self.update_gripper_spring()
         action["gripper.pos"] = np.clip(1 - ((action["gripper.pos"] - 5) / (85 - 5)), 0, 1)  # normalize gripper position to 0-1 range, w/ some deadzone
         dt_ms = (time.perf_counter() - start) * 1e3
-        logger.debug(f"{self} read action: {dt_ms:.1f}ms")
+        logger.debug(f"id {self.id} read action: {dt_ms:.1f}ms")
         return action
 
     def send_feedback(self, feedback: dict[str, float]) -> None:
@@ -589,4 +632,4 @@ class YamActiveLeaderTeleoperator(Teleoperator):
             self._debug_csv_file.close()
             print(f"[gripper_spring] debug log saved → {self._debug_csv_path}")
         self.bus.disconnect()
-        logger.info(f"{self} disconnected.")
+        logger.info(f"id {self.id} disconnected.")
