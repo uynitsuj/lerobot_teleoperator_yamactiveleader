@@ -286,11 +286,7 @@ class YamActiveLeaderTeleoperator(Teleoperator):
     DITHER_FREQUENCY: float = 0.95
 
     def drive_to_zero(self, settle_time: float | None = None) -> None:
-        """Enable torque and command every motor to the physical zero config.
-
-        Uses raw 2048 (the encoder value that ``set_half_turn_homings``
-        maps to zero config).  This is correct regardless of whether
-        the calibrated range is symmetric.
+        """Enable torque, drive arm to zero config, then release arm joints.
 
         After *settle_time* seconds the arm joints are released (torque
         disabled) so the operator can move them freely.  The gripper is
@@ -298,25 +294,7 @@ class YamActiveLeaderTeleoperator(Teleoperator):
         needed.
         """
         settle_time = settle_time if settle_time is not None else self.ZERO_SETTLE_TIME
-        logger.info("Driving all motors to zero config (raw 2048)...")
-        # --- Debug: BEFORE ---
-        raw_before = self.bus.sync_read("Present_Position", normalize=False)
-        # --- Enable + command ---
-        self.bus.enable_torque()
-        self.bus.sync_write("Goal_Position", self.HALF_TURN_RAW)
-        time.sleep(settle_time)
-        # --- Debug: AFTER ---
-        raw_after = self.bus.sync_read("Present_Position", normalize=False)
-        norm_after = self.bus.sync_read("Present_Position")
-        goal_readback = self.bus.sync_read("Goal_Position", normalize=False)
-        homing = self.bus.sync_read("Homing_Offset", normalize=False)
-        mins = self.bus.sync_read("Min_Position_Limit", normalize=False)
-        maxs = self.bus.sync_read("Max_Position_Limit", normalize=False)
-   
-        for m, cal in (self.bus.calibration or {}).items():
-            print(f"  {m}: range=[{cal.range_min}, {cal.range_max}] homing={cal.homing_offset}")
-        # --- End debug ---
-        # Release arm joints so the user can back-drive them
+        self.drive_to_config({m: 0.0 for m in self.ARM_MOTORS}, settle_time=settle_time)
         self.bus.disable_torque(self.ARM_MOTORS)
         logger.info("Arm joints released — gripper still held.")
 
