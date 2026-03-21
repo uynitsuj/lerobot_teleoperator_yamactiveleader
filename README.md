@@ -30,7 +30,7 @@ lerobot-calibrate --teleop.type=yam_active_leader --teleop.port=/dev/tty.usbmode
 
 Install the package in editable mode:
 ```bash
-git clone https://github.com/SpesRobotics/lerobot-teleoperator-teleop.git
+git clone https://github.com/uynitsuj/lerobot_teleoperator_yamactiveleader.git
 cd lerobot-teleop
 uv pip install -e .
 ```
