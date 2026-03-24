@@ -611,9 +611,7 @@ class YamActiveLeaderTeleoperator(Teleoperator):
 
         Sets a very low P gain so the motor applies only a tiny corrective
         force, then commands each joint to oscillate sinusoidally around its
-        current position.  Dithering is only applied when the joint velocity
-        is below *speed_threshold*, ensuring the oscillation is suppressed
-        whenever the operator is actively back-driving the arm.
+        current position unconditionally — no velocity read is needed.
 
         Call :pymeth:`update_arm_dither` once per control-loop tick (or let
         :pymeth:`get_action` call it automatically).  Call
@@ -622,8 +620,7 @@ class YamActiveLeaderTeleoperator(Teleoperator):
 
         Args:
             amplitude: Half-width of the sine wave in normalized degrees.
-            speed_threshold: Raw velocity magnitude below which dithering
-                activates.  Joints faster than this are left alone.
+            speed_threshold: Ignored — kept for API compatibility.
             p_coeff: P_Coefficient written to EPROM.  Very low (2-8) gives
                 minimal torque so the dither stays subtle.
             torque_limit: Torque_Limit (0-1000) applied to arm motors.
@@ -631,7 +628,6 @@ class YamActiveLeaderTeleoperator(Teleoperator):
                 (0 → 1 = one full sine cycle).  0.10 ≈ 5 Hz at 50 Hz loop.
         """
         amplitude = amplitude if amplitude is not None else self.DITHER_AMPLITUDE
-        speed_threshold = speed_threshold if speed_threshold is not None else self.DITHER_SPEED_THRESHOLD
         p_coeff = p_coeff if p_coeff is not None else self.DITHER_P_COEFF
         torque_limit = torque_limit if torque_limit is not None else self.DITHER_TORQUE_LIMIT
         frequency = frequency if frequency is not None else self.DITHER_FREQUENCY
@@ -650,36 +646,23 @@ class YamActiveLeaderTeleoperator(Teleoperator):
         positions = self.bus.sync_read("Present_Position")
         self._arm_dither: dict[str, Any] = {
             "amplitude": amplitude,
-            "speed_threshold": speed_threshold,
             "frequency": frequency,
             # Per-joint sine phase (0.0 – 1.0).
             "phases": {m: 0.0 for m in self.ARM_MOTORS},
             # Continuously updated center of oscillation (follows real pos).
             "centers": {m: positions[m] for m in self.ARM_MOTORS},
-            # Per-joint torque state — starts enabled (enable_torque called above).
-            "torque_on": {m: True for m in self.ARM_MOTORS},
         }
         logger.info(
-            "Arm dither started: amplitude=%.2f°  speed_threshold=%d  "
-            "p_coeff=%d  torque_limit=%d  frequency=%.3f",
-            amplitude, speed_threshold, p_coeff, torque_limit, frequency,
+            "Arm dither started: amplitude=%.2f°  p_coeff=%d  torque_limit=%d  frequency=%.3f",
+            amplitude, p_coeff, torque_limit, frequency,
         )
 
     def update_arm_dither(self, positions: dict[str, float] | None = None) -> None:
         """Apply one dither tick; call once per control-loop iteration.
 
-        Reads ``Present_Velocity`` for each arm joint (raw, sign-magnitude
-        encoded: bit 15 = direction, bits 0-14 = magnitude).
-
-        * **Slow joint** (speed < threshold): torque enabled, phase advanced,
-          sinusoidal offset applied to ``Goal_Position``.
-        * **Fast joint** (operator back-driving): torque disabled so the motor
-          offers zero resistance, phase reset to 0 for a clean re-entry.
-
-        Torque transitions are only written on state changes to avoid
-        flooding the bus every tick.  When a transition occurs, ``Torque_Enable``
-        and ``Lock`` are batch-written with ``sync_write`` (one packet each)
-        rather than per-motor ``write`` calls.
+        Unconditionally advances each arm joint's sine phase and writes a
+        ``Goal_Position`` offset around the current position.  No velocity
+        read is performed — dither is always active when enabled.
 
         Args:
             positions: Pre-read ``Present_Position`` dict from the caller
@@ -693,55 +676,22 @@ class YamActiveLeaderTeleoperator(Teleoperator):
         try:
             if positions is None:
                 positions = self.bus.sync_read("Present_Position")
-            vel_raw = self.bus.sync_read("Present_Velocity", normalize=False)
         except Exception as e:
-            logger.warning("update_arm_dither: read failed: %s", e)
+            logger.warning("update_arm_dither: position read failed: %s", e)
             return
 
-        enable_motors: list[str] = []
-        disable_motors: list[str] = []
         goals: dict[str, float] = {}
-
         for motor in self.ARM_MOTORS:
-            # Decode sign-magnitude velocity: strip direction bit (bit 15).
-            speed = int(vel_raw[motor]) & 0x7FFF
             pos = positions[motor]
-            was_on = cfg["torque_on"][motor]
-
-            if speed < cfg["speed_threshold"]:
-                # Near-stationary — dither active, torque on.
-                if not was_on:
-                    enable_motors.append(motor)
-                    cfg["torque_on"][motor] = True
-                cfg["centers"][motor] = pos
-                offset = cfg["amplitude"] * np.sin(2.0 * np.pi * cfg["phases"][motor])
-                goals[motor] = pos + offset
-                cfg["phases"][motor] = (cfg["phases"][motor] + cfg["frequency"]) % 1.0
-            else:
-                # Moving — torque off, no goal write, phase reset.
-                if was_on:
-                    disable_motors.append(motor)
-                    cfg["torque_on"][motor] = False
-                cfg["centers"][motor] = pos
-                cfg["phases"][motor] = 0.0
+            cfg["centers"][motor] = pos
+            offset = cfg["amplitude"] * np.sin(2.0 * np.pi * cfg["phases"][motor])
+            goals[motor] = pos + offset
+            cfg["phases"][motor] = (cfg["phases"][motor] + cfg["frequency"]) % 1.0
 
         try:
-            if disable_motors:
-                # sync_write = one broadcast packet per register, no per-motor round trips.
-                self.bus.sync_write("Torque_Enable", {m: TorqueMode.DISABLED.value for m in disable_motors}, normalize=False)
-                self.bus.sync_write("Lock", {m: 0 for m in disable_motors}, normalize=False)
-            if enable_motors:
-                self.bus.sync_write("Torque_Enable", {m: TorqueMode.ENABLED.value for m in enable_motors}, normalize=False)
-                self.bus.sync_write("Lock", {m: 1 for m in enable_motors}, normalize=False)
-            if goals:
-                self.bus.sync_write("Goal_Position", goals)
+            self.bus.sync_write("Goal_Position", goals)
         except Exception as e:
-            logger.warning("update_arm_dither: write failed: %s", e)
-
-        logger.debug(
-            "Arm dither — enabled=%s disabled=%s goals=%s",
-            enable_motors, disable_motors, {m: f"{v:.2f}" for m, v in goals.items()},
-        )
+            logger.warning("update_arm_dither: goal write failed: %s", e)
 
     def stop_arm_dither(self) -> None:
         """Stop dithering, disable arm torque, and restore default P gain."""
