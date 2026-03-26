@@ -17,20 +17,30 @@ git clone https://github.com/uynitsuj/lerobot_teleoperator_yamactiveleader
 cd lerobot_teleoperator_yamactiveleader
 uv pip install -e .
 
-lerobot-find-port # find out which port the WaveShare Bus Servo Adapter is on, set as arg for setup_motors.py
+lerobot-find-port # Find out which port the WaveShare Bus Servo Adapter is on, set as arg for setup_motors.py
 
-uv run setup_motors.py /dev/tty.usbmodem5AE60805531
+uv run setup_motors.py /dev/tty.usbmodem5AE60805531 # Need to write persistent motor IDs to servo onboard EEPROM
 
+# One-time step per device to write a calibration file for zero config and limits
 lerobot-calibrate --teleop.type=yam_active_leader --teleop.port=/dev/tty.usbmodem5AE60806691 --teleop.id=left
 lerobot-calibrate --teleop.type=yam_active_leader --teleop.port=/dev/tty.usbmodem5AE60805531 --teleop.id=right
     
 ```
 
-## Development
-
-Install the package in editable mode:
-```bash
-git clone https://github.com/uynitsuj/lerobot_teleoperator_yamactiveleader.git
-cd lerobot_teleoperator_yamactiveleader
-uv pip install -e .
+## Troubleshooting
+Issue:
 ```
+serial.serialutil.SerialException: [Errno 13] could not open port /dev/ttyACM1: [Errno 13] Permission denied: '/dev/ttyACM1' Why do I see this and is there a way to rectify? 
+```
+This is a common permissions issue with serial ports on Linux.
+Solution: Add your user to the dialout group
+Run this command to add yourself to the dialout group:
+```
+sudo usermod -a -G dialout $USER
+```
+After running this command, you need to log out and log back in (or reboot) for the group membership to take effect.
+
+  To verify it worked after logging back in:
+  groups
+
+  You should see dialout in the list.
