@@ -238,7 +238,7 @@ class YamActiveLeaderTeleoperator(Teleoperator):
     # Torque limit (0–1000) applied while the user is actively squeezing the
     # trigger.  Keep very low so the trigger is easy to hold against the
     # motor's return force.
-    GRIPPER_SQUEEZE_TORQUE: int = 1
+    GRIPPER_SQUEEZE_TORQUE: int = 100
 
     # Displacement from GRIPPER_OPEN_POS (in normalized units) below which
     # the motor is always in return mode regardless of current.  Prevents the
@@ -428,12 +428,18 @@ class YamActiveLeaderTeleoperator(Teleoperator):
         disp_delta = displacement - cfg["prev_displacement"]
         cfg["prev_displacement"] = displacement
         self.trigger_closing = disp_delta > 0
+        # print("disp_delta", disp_delta)
+        # print("filtered_current", current)
+
+        # print("self.trigger_closing", self.trigger_closing)
 
         if self.trigger_closing:
             # User is actively squeezing — reduce torque
             torque = cfg["squeeze_torque"]
         else:
-            torque = cfg["return_torque"]
+            torque = int(cfg["return_torque"] * 1/(current/6 + 1))
+            # print("1 / (current + 1)", 1 / (current + 1))
+            # print("torque", torque)
 
 
         self.bus.sync_write("Torque_Limit", {"gripper": torque}, num_retry=3)
