@@ -1,8 +1,8 @@
 # lerobot_teleoperator_yamactiveleader
 Active YAM teleop leader device integration for LeRobot
 
-<img src="media/yam_active_leader.gif" width="500">
-<img src="media/yam_active_leader_dagger.gif" width="500">
+<img src="media/drill_teleop.gif" width="400">
+<img src="media/yam_active_leader_dagger.gif" width="400">
 
 [Bill of Materials](BOM.md)
 
