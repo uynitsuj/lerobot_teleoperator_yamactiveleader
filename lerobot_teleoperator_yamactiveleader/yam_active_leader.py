@@ -193,6 +193,11 @@ class YamActiveLeaderTeleoperator(Teleoperator):
     # while waiting for human intervention.
     DRIVE_TORQUE_LIMIT: int = 500
 
+    # P_Coefficient (PID proportional gain, 0-254) applied during drive to
+    # config.  Higher values produce faster, more aggressive position tracking.
+    # Default P=32 from configure() is conservative; 64-80 gives snappier response.
+    DRIVE_P_COEFF: int = 50
+
     # --- start_arm_hold (intervention detection) ---
 
     # Number of Present_Current readings averaged to establish the per-joint
@@ -210,7 +215,7 @@ class YamActiveLeaderTeleoperator(Teleoperator):
     # from noise; too high → sluggish detection.  Tune empirically by
     # watching the `max_delta` debug log while the arm is held still vs.
     # while you push against it.
-    HOLD_DELTA_THRESHOLD: float = 8.0
+    HOLD_DELTA_THRESHOLD: float = 9.0
 
     # EMA smoothing factor for live current readings during hold monitoring
     # (0–1).  Lower values apply heavier smoothing, reducing noise at the
@@ -461,6 +466,7 @@ class YamActiveLeaderTeleoperator(Teleoperator):
         joint_positions_deg: dict[str, float],
         settle_time: float | None = None,
         torque_limit: int | None = None,
+        p_coeff: int | None = None,
     ) -> None:
         """Enable torque on arm motors and drive to the given joint positions.
 
@@ -475,17 +481,44 @@ class YamActiveLeaderTeleoperator(Teleoperator):
                 persists into the subsequent hold phase so the arm doesn't
                 snap hard against disturbances during hold either.
                 Defaults to :pyattr:`DRIVE_TORQUE_LIMIT`.
+            p_coeff: P_Coefficient (0-254) for position tracking gain.
+                Higher values give faster, more aggressive tracking.
+                Defaults to :pyattr:`DRIVE_P_COEFF` (180).
         """
         settle_time = settle_time if settle_time is not None else self.DRIVE_SETTLE_TIME
         torque_limit = torque_limit if torque_limit is not None else self.DRIVE_TORQUE_LIMIT
-        logger.info("Driving arm to config: %s  torque_limit=%d", {m: f"{v:.1f}" for m, v in joint_positions_deg.items()}, torque_limit)
-        self.bus.sync_write("Torque_Limit", {m: torque_limit for m in self.ARM_MOTORS}, normalize=False)
+        p_coeff = p_coeff if p_coeff is not None else self.DRIVE_P_COEFF
+        logger.info("Driving arm to config: %s  torque_limit=%d  p_coeff=%d",
+                    {m: f"{v:.1f}" for m, v in joint_positions_deg.items()}, torque_limit, p_coeff)
+
+        # Ensure motors are in POSITION mode (required for Goal_Position to work)
+        # Must disable torque before writing Operating_Mode and P_Coefficient (EEPROM registers)
+        self.bus.disable_torque(self.ARM_MOTORS)
+        for motor in self.ARM_MOTORS:
+            self.bus.write("Operating_Mode", motor, OperatingMode.POSITION.value)
+            self.bus.write("P_Coefficient", motor, p_coeff)
+
+        # Set torque limit and re-enable torque
+        # Use higher torque for joint_3 (elbow) which has the most gravity load
+        torque_limits = {
+            "joint_1": torque_limit,
+            "joint_2": torque_limit,
+            "joint_3": min(1000, int(torque_limit * 2)),  # 2x torque for joint_3, capped at 1000
+            "joint_4": torque_limit,
+            "joint_5": torque_limit,
+            "joint_6": torque_limit,
+        }
+        self.bus.sync_write("Torque_Limit", torque_limits, normalize=False)
         self.bus.enable_torque(self.ARM_MOTORS)
+
+        # Command target positions
         goals = {m: v for m, v in joint_positions_deg.items() if m in self.ARM_MOTORS}
         if goals:
             self.bus.sync_write("Goal_Position", goals)
         time.sleep(settle_time)
         logger.info("Arm settled at target config.")
+        # Print motor diagnostics after settling
+        self._print_motor_info()
 
     def start_arm_hold(
         self,
