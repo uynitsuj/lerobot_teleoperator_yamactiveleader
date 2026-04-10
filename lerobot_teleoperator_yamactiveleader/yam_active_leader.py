@@ -265,21 +265,21 @@ class YamActiveLeaderTeleoperator(Teleoperator):
     # Half-amplitude of the sinusoidal dither in normalized degrees.  Small
     # enough to be imperceptible in the trajectory but large enough to keep
     # the joint moving so dynamic (not static) friction dominates.
-    DITHER_AMPLITUDE: float = 0.4
+    DITHER_AMPLITUDE: float = 0.65
 
     # Raw velocity magnitude (bits 0-14 of Present_Velocity sign-magnitude
     # register) below which dithering is active.  When the joint is moving
     # faster than this the dither phase is reset and no offset is applied.
-    DITHER_SPEED_THRESHOLD: int = 60
+    DITHER_SPEED_THRESHOLD: int = 100
 
     # P_Coefficient written to arm motors while dithering.  Very low so the
     # resulting torque is tiny — just enough to oscillate slightly against
     # stiction.  Typical default is 32; values of 2-8 work well here.
-    DITHER_P_COEFF: int = 20
+    DITHER_P_COEFF: int = 28
 
     # Torque_Limit applied to arm motors during dithering (0-1000).  Keep
     # low to prevent the joint from snapping to the dither target.
-    DITHER_TORQUE_LIMIT: int = 45
+    DITHER_TORQUE_LIMIT: int = 50
 
     # Phase increment per update call (0 → 1 = one full sine cycle).  At a
     # 50 Hz control loop, 0.10 gives a 5 Hz dither; 0.20 gives 10 Hz.
