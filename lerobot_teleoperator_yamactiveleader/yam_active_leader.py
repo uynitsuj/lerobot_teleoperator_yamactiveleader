@@ -36,7 +36,9 @@ class YamActiveLeaderTeleoperator(Teleoperator):
         )
         self.gripper_reading_raw = None
         self.trigger_closing = None
-        self.active_trigger = active_trigger # whether to set trigger motor as an active virtual spring
+        self.active_trigger = active_trigger
+        self.trigger_high = None
+        self.trigger_low = None
 
     @property
     def action_features(self) -> dict[str, type]:
@@ -51,7 +53,13 @@ class YamActiveLeaderTeleoperator(Teleoperator):
         return self.bus.is_connected
 
     @check_if_already_connected
-    def connect(self, calibrate: bool = True) -> None:
+    def connect(
+        self,
+        calibrate: bool = True,
+        drive_to_zero: bool = False,
+        hold_gripper: bool = False,
+        dither: bool = False,
+    ) -> None:
         self.bus.connect()
         if not self.is_calibrated and calibrate:
             logger.info(
@@ -61,6 +69,20 @@ class YamActiveLeaderTeleoperator(Teleoperator):
 
         self.configure()
         self._print_motor_info()
+
+        if self.active_trigger:
+            self.calibrate_trigger()
+
+        if drive_to_zero:
+            self.drive_to_zero()
+            self.start_arm_hold()
+
+        if hold_gripper:
+            self.start_gripper_spring()
+
+        if dither:
+            self.start_arm_dither()
+
         logger.info(f"{self} connected.")
 
     def _print_motor_info(self) -> None:
@@ -363,7 +385,8 @@ class YamActiveLeaderTeleoperator(Teleoperator):
                 Default 0.15 strongly damps the rapid spikes that cause
                 bang-bang oscillation between squeeze and release states.
         """
-        open_pos = open_pos if open_pos is not None else self.GRIPPER_OPEN_POS
+        if open_pos is None:
+            open_pos = self.trigger_low if self.trigger_low is not None else self.GRIPPER_OPEN_POS
         return_torque = return_torque if return_torque is not None else self.GRIPPER_RETURN_TORQUE
         min_return_torque = min_return_torque if min_return_torque is not None else self.GRIPPER_SQUEEZE_TORQUE
         press_threshold = press_threshold if press_threshold is not None else self.GRIPPER_PRESS_THRESHOLD
@@ -387,9 +410,7 @@ class YamActiveLeaderTeleoperator(Teleoperator):
         if p_coeff is not None:
             self.bus.write("P_Coefficient", "gripper", p_coeff)
 
-        # Set goal to open position, arm with return_torque, enable torque.
-        # normalize=True maps 0 → raw 2048 (calibrated midpoint / open position).
-        self.bus.write("Goal_Position", "gripper", self.HALF_TURN_RAW, normalize=True)
+        self.bus.write("Goal_Position", "gripper", open_pos, normalize=True)
         self.bus.write("Torque_Limit", "gripper", return_torque)
         self.bus.enable_torque("gripper")
         logger.info(
@@ -455,6 +476,26 @@ class YamActiveLeaderTeleoperator(Teleoperator):
     # ------------------------------------------------------------------ #
     # DAgger intervention support
     # ------------------------------------------------------------------ #
+
+    def calibrate_trigger(self) -> None:
+        """Drive gripper to both limits to determine the 0-1 normalization range."""
+        self.bus.enable_torque("gripper")
+        self.bus.write("Torque_Limit", "gripper", 400)
+
+        self.bus.write("Goal_Position", "gripper", 300, normalize=True)
+        time.sleep(0.3)
+        pos_a = self.bus.sync_read("Present_Position")["gripper"]
+
+        self.bus.write("Goal_Position", "gripper", -300, normalize=True)
+        time.sleep(0.3)
+        pos_b = self.bus.sync_read("Present_Position")["gripper"]
+
+        self.trigger_low = min(pos_a, pos_b)
+        self.trigger_high = max(pos_a, pos_b)
+
+        self.bus.write("Goal_Position", "gripper", self.trigger_low, normalize=True)
+        time.sleep(0.5)
+        logger.info("Trigger calibrated: low=%.1f high=%.1f", self.trigger_low, self.trigger_high)
 
     def drive_to_config(
         self,
@@ -783,7 +824,11 @@ class YamActiveLeaderTeleoperator(Teleoperator):
             self.update_gripper_spring()
         if getattr(self, "_arm_dither", None) is not None:
             self.update_arm_dither(positions=self._last_action)
-        action["gripper.pos"] = np.clip(1 - ((action["gripper.pos"] - 5) / (85 - 5)), 0, 1)  # normalize gripper position to 0-1 range, w/ some deadzone
+        if self.trigger_low is not None and self.trigger_high is not None:
+            rng = self.trigger_high - self.trigger_low
+            action["gripper.pos"] = float(np.clip(
+                (self.trigger_high - action["gripper.pos"]) / rng, 0, 1
+            ))
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"id {self.id} read action: {dt_ms:.1f}ms")
         return action
