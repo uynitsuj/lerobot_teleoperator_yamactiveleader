@@ -30,7 +30,7 @@ lerobot-calibrate --teleop.type=yam_active_leader --teleop.port=/dev/tty.usbmode
 ## Troubleshooting
 Issue:
 ```
-serial.serialutil.SerialException: [Errno 13] could not open port /dev/ttyACM1: [Errno 13] Permission denied: '/dev/ttyACM1' Why do I see this and is there a way to rectify? 
+serial.serialutil.SerialException: [Errno 13] could not open port /dev/ttyACM1: [Errno 13] Permission denied: '/dev/ttyACM1'
 ```
 This is a common permissions issue with serial ports on Linux.
 Solution: Add your user to the dialout group
@@ -40,7 +40,3 @@ sudo usermod -a -G dialout $USER
 ```
 After running this command, you need to log out and log back in (or reboot) for the group membership to take effect.
 
-  To verify it worked after logging back in:
-  groups
-
-  You should see dialout in the list.
